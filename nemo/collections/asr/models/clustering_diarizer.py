@@ -362,46 +362,36 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
                     torch.stack(self.speaker_database[speaker_id]['embeddings']), dim=0
                 )
 
-    def link_speakers(self, new_file_id, new_embs):
-        """
-        Link speakers in new audio files with stored speakers.
-        """
+    def link_speakers(self, new_file_id, new_embs, linkage_threshold):
         linked_speakers = {}
         for speaker_id, new_emb in enumerate(new_embs):
-            if not self.speaker_database:
-                # When the speaker database is empty, add the new speaker directly
-                new_speaker_key = f"{new_file_id}_speaker_{speaker_id}"
-                self.speaker_database[new_speaker_key] = {
-                    'centroid': new_emb,
-                    'embeddings': [new_emb],
-                    'unique_label': self.unique_speaker_id
-                }
-                linked_speakers[new_speaker_key] = self.unique_speaker_id
-                logging.info(f"New speaker {new_speaker_key} added with unique label {self.unique_speaker_id}")
-                self.unique_speaker_id += 1
-                continue
-    
             best_match = None
             best_score = float('inf')
+            is_new_speaker = True
+    
+            # Compare new embedding with all stored embeddings
             for stored_speaker, data in self.speaker_database.items():
                 score = np.linalg.norm(new_emb - data['centroid'])
-                if score < best_score:
+                if score < linkage_threshold:
                     best_score = score
                     best_match = stored_speaker
+                    is_new_speaker = False
+                    break  # Found a matching speaker, no need to continue checking
     
-            if best_score < 0.7:
-                logging.info(f"Speaker {new_file_id}_speaker_{speaker_id} matches with stored speaker {best_match} with score {best_score}")
-                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.speaker_database[best_match]['unique_label']
-            else:
+            if is_new_speaker:
+                # Add the new speaker to the database
                 new_speaker_key = f"{new_file_id}_speaker_{speaker_id}"
                 self.speaker_database[new_speaker_key] = {
                     'centroid': new_emb,
                     'embeddings': [new_emb],
                     'unique_label': self.unique_speaker_id
                 }
-                linked_speakers[new_speaker_key] = self.unique_speaker_id
+                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.unique_speaker_id
                 logging.info(f"New speaker {new_speaker_key} added with unique label {self.unique_speaker_id}")
                 self.unique_speaker_id += 1
+            else:
+                logging.info(f"Speaker {new_file_id}_speaker_{speaker_id} matches with stored speaker {best_match} with score {best_score}")
+                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.speaker_database[best_match]['unique_label']
     
         logging.info(f"Current speaker database: {self.speaker_database}")
         return linked_speakers
