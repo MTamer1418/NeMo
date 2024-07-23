@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 import os
-import pickle as pkl
+import json
 import shutil
 import tarfile
 import tempfile
+import numpy as np
+import pickle as pkl
 from copy import deepcopy
 from typing import Any, List, Optional, Union
 
@@ -105,6 +106,9 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
 
         # Clustering params
         self._cluster_params = self._diarizer_params.clustering.parameters
+
+        self.speaker_database = {}  # New attribute to store speaker information
+        self.unique_speaker_id = 0  # Unique speaker ID counter
 
     @classmethod
     def list_available_models(cls):
@@ -339,6 +343,70 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             )
         validate_vad_manifest(self.AUDIO_RTTM_MAP, vad_manifest=self._speaker_manifest_path)
 
+    
+    def store_embeddings(self, embeddings, speaker_ids):
+        """
+        Store embeddings and centroids for speaker linking.
+        """
+        for speaker_id, emb in zip(speaker_ids, embeddings):
+            if speaker_id not in self.speaker_database:
+                self.speaker_database[speaker_id] = {
+                    'centroid': emb,
+                    'embeddings': [emb],
+                    'unique_label': self.unique_speaker_id
+                }
+                self.unique_speaker_id += 1
+            else:
+                self.speaker_database[speaker_id]['embeddings'].append(emb)
+                self.speaker_database[speaker_id]['centroid'] = torch.mean(
+                    torch.stack(self.speaker_database[speaker_id]['embeddings']), dim=0
+                )
+
+    def link_speakers(self, new_file_id, new_embs):
+        """
+        Link speakers in new audio files with stored speakers.
+        """
+        linked_speakers = {}
+        for speaker_id, new_emb in enumerate(new_embs):
+            if not self.speaker_database:
+                # When the speaker database is empty, add the new speaker directly
+                new_speaker_key = f"{new_file_id}_speaker_{speaker_id}"
+                self.speaker_database[new_speaker_key] = {
+                    'centroid': new_emb,
+                    'embeddings': [new_emb],
+                    'unique_label': self.unique_speaker_id
+                }
+                linked_speakers[new_speaker_key] = self.unique_speaker_id
+                logging.info(f"New speaker {new_speaker_key} added with unique label {self.unique_speaker_id}")
+                self.unique_speaker_id += 1
+                continue
+    
+            best_match = None
+            best_score = float('inf')
+            for stored_speaker, data in self.speaker_database.items():
+                score = np.linalg.norm(new_emb - data['centroid'])
+                if score < best_score:
+                    best_score = score
+                    best_match = stored_speaker
+    
+            if best_score < 0.7:
+                logging.info(f"Speaker {new_file_id}_speaker_{speaker_id} matches with stored speaker {best_match} with score {best_score}")
+                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.speaker_database[best_match]['unique_label']
+            else:
+                new_speaker_key = f"{new_file_id}_speaker_{speaker_id}"
+                self.speaker_database[new_speaker_key] = {
+                    'centroid': new_emb,
+                    'embeddings': [new_emb],
+                    'unique_label': self.unique_speaker_id
+                }
+                linked_speakers[new_speaker_key] = self.unique_speaker_id
+                logging.info(f"New speaker {new_speaker_key} added with unique label {self.unique_speaker_id}")
+                self.unique_speaker_id += 1
+    
+        logging.info(f"Current speaker database: {self.speaker_database}")
+        return linked_speakers
+
+    
     def _extract_embeddings(self, manifest_file: str, scale_idx: int, num_scales: int):
         """
         This method extracts speaker embeddings from segments passed through manifest_file
@@ -391,7 +459,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             self._embeddings_file = name + f'_embeddings.pkl'
             pkl.dump(self.embeddings, open(self._embeddings_file, 'wb'))
             logging.info("Saved embedding files to {}".format(embedding_dir))
-
+    
     def diarize(self, paths2audio_files: List[str] = None, batch_size: int = 0):
         """
         Diarize files provided through paths2audio_files or manifest file
@@ -402,54 +470,53 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
 
         self._out_dir = self._diarizer_params.out_dir
 
+        # Load the speaker database
+        speaker_database_path = os.path.join(self._out_dir, 'speaker_database.pkl')
+        self.load_speaker_database(speaker_database_path)
+    
         self._speaker_dir = os.path.join(self._diarizer_params.out_dir, 'speaker_outputs')
-
+    
         if os.path.exists(self._speaker_dir):
             logging.warning("Deleting previous clustering diarizer outputs.")
             shutil.rmtree(self._speaker_dir, ignore_errors=True)
         os.makedirs(self._speaker_dir)
-
+    
         if not os.path.exists(self._out_dir):
             os.mkdir(self._out_dir)
-
+    
         self._vad_dir = os.path.join(self._out_dir, 'vad_outputs')
         self._vad_out_file = os.path.join(self._vad_dir, "vad_out.json")
-
+    
         if batch_size:
             self._cfg.batch_size = batch_size
-
+    
         if paths2audio_files:
             if type(paths2audio_files) is list:
                 self._diarizer_params.manifest_filepath = os.path.join(self._out_dir, 'paths2audio_filepath.json')
                 self.path2audio_files_to_manifest(paths2audio_files, self._diarizer_params.manifest_filepath)
             else:
                 raise ValueError("paths2audio_files must be of type list of paths to file containing audio file")
-
+    
         self.AUDIO_RTTM_MAP = audio_rttm_map(self._diarizer_params.manifest_filepath)
-
+    
         out_rttm_dir = os.path.join(self._out_dir, 'pred_rttms')
         os.makedirs(out_rttm_dir, exist_ok=True)
-
-        # Speech Activity Detection
+    
         self._perform_speech_activity_detection()
-
-        # Segmentation
+    
         scales = self.multiscale_args_dict['scale_dict'].items()
         for scale_idx, (window, shift) in scales:
-
-            # Segmentation for the current scale (scale_idx)
             self._run_segmentation(window, shift, scale_tag=f'_scale{scale_idx}')
-
-            # Embedding Extraction for the current scale (scale_idx)
             self._extract_embeddings(self.subsegments_manifest_path, scale_idx, len(scales))
-
             self.multiscale_embeddings_and_timestamps[scale_idx] = [self.embeddings, self.time_stamps]
-
+    
         embs_and_timestamps = get_embs_and_timestamps(
             self.multiscale_embeddings_and_timestamps, self.multiscale_args_dict
         )
-
-        # Clustering
+    
+        # Debug logging to check the structure of embs_and_timestamps
+        logging.info(f"embs_and_timestamps structure: {embs_and_timestamps}")
+    
         all_reference, all_hypothesis = perform_clustering(
             embs_and_timestamps=embs_and_timestamps,
             AUDIO_RTTM_MAP=self.AUDIO_RTTM_MAP,
@@ -459,9 +526,8 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             verbose=self.verbose,
         )
         logging.info("Outputs are saved in {} directory".format(os.path.abspath(self._diarizer_params.out_dir)))
-
-        # Scoring
-        return score_labels(
+    
+        scores = score_labels(
             self.AUDIO_RTTM_MAP,
             all_reference,
             all_hypothesis,
@@ -469,7 +535,60 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             ignore_overlap=self._diarizer_params.ignore_overlap,
             verbose=self.verbose,
         )
+    
+        # Ensure linkage_threshold is set
+        linkage_threshold = self._cluster_params.get('linkage_threshold', 0.5)  # Set a default value if not present
+    
+        # Perform speaker linking
+        linked_speakers = {}
+        for file_id, embs in embs_and_timestamps.items():
+            logging.info(f"Processing file_id: {file_id} with embeddings: {embs}")
+            if 'embeddings' in embs:
+                file_linked_speakers = self.link_speakers(file_id, embs['embeddings'])  # 'embeddings' contains the embeddings
+                linked_speakers[file_id] = file_linked_speakers
+            else:
+                logging.error(f"Key 'embeddings' not found in embs for file_id: {file_id}")
+    
+        # Update the hypothesis with linked speaker information
+        for file_id, hypothesis in all_hypothesis:
+            for segment in hypothesis.itersegments():
+                original_speaker = hypothesis[segment]
+                linked_speaker = linked_speakers[file_id].get(f"{file_id}_speaker_{original_speaker}", original_speaker)
+                hypothesis[segment] = linked_speaker
+    
+        # Save the speaker database
+        self.save_speaker_database(speaker_database_path)
+    
+        return scores
+    
+    def compare_new_audio(self, paths2audio_files: List[str], batch_size: int = 0):
+        """
+        Compare embeddings from new audio files with stored embeddings to determine if the same speakers are present.
+        """
+        self.diarize(paths2audio_files, batch_size)
 
+        new_embeddings = []
+        for scale_idx in self.multiscale_embeddings_and_timestamps:
+            embeddings, _ = self.multiscale_embeddings_and_timestamps[scale_idx]
+            new_embeddings.extend(embeddings.values())
+
+        return self.compare_embeddings(new_embeddings)
+
+    def save_speaker_database(self, path):
+        with open(path, 'wb') as f:
+            pkl.dump(self.speaker_database, f)
+        logging.info(f"Speaker database saved to {path}")
+        logging.info(f"Current speaker database: {self.speaker_database}")
+
+    def load_speaker_database(self, path):
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                self.speaker_database = pkl.load(f)
+            logging.info(f"Speaker database loaded from {path}")
+        else:
+            logging.info(f"No existing speaker database found at {path}. Starting with an empty database.")
+
+    
     @staticmethod
     def __make_nemo_file_from_folder(filename, source_dir):
         with tarfile.open(filename, "w:gz") as tar:
