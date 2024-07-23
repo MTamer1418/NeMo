@@ -362,7 +362,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
                     torch.stack(self.speaker_database[speaker_id]['embeddings']), dim=0
                 )
 
-    def link_speakers(self, new_file_id, new_embs, linkage_threshold):
+    def link_speakers(self, new_file_id, new_embs):
         linked_speakers = {}
         for speaker_id, new_emb in enumerate(new_embs):
             best_match = None
@@ -372,7 +372,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             # Compare new embedding with all stored embeddings
             for stored_speaker, data in self.speaker_database.items():
                 score = np.linalg.norm(new_emb - data['centroid'])
-                if score < linkage_threshold:
+                if score < 0.8:
                     best_score = score
                     best_match = stored_speaker
                     is_new_speaker = False
