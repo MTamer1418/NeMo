@@ -516,6 +516,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             device=self._speaker_model.device,
             verbose=self.verbose,
         )
+        
         logging.info("Outputs are saved in {} directory".format(os.path.abspath(self._diarizer_params.out_dir)))
     
         scores = score_labels(
@@ -528,23 +529,20 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
         )
     
         # Ensure linkage_threshold is set
-        linkage_threshold = self._cluster_params.get('linkage_threshold', 0.5)  # Set a default value if not present
+        # linkage_threshold = self._cluster_params.get('linkage_threshold', 0.5)  # Set a default value if not present
     
         # Perform speaker linking using centroids
         linked_speakers = {}
         for file_id, new_centroids in centroids.items():
             linked_speakers[file_id] = self.link_speakers(new_centroids)
-
-        # Update the hypothesis with linked speaker information
+    
         for file_id, hypothesis in all_hypothesis:
             for segment in hypothesis.itersegments():
                 original_speaker = hypothesis[segment]
                 linked_speaker = linked_speakers[file_id].get(f"{file_id}_speaker_{original_speaker}", original_speaker)
                 hypothesis[segment] = linked_speaker
-    
-        # Save the speaker database
+
         self.save_speaker_database(speaker_database_path)
-    
         return scores
     
     def compare_new_audio(self, paths2audio_files: List[str], batch_size: int = 0):
