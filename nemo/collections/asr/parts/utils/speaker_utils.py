@@ -499,8 +499,9 @@ def perform_clustering(
         # Compute centroids
         unique_labels = np.unique(cluster_labels)
         centroids_list = []
+        embeddings = uniq_embs_and_timestamps['embeddings'].cpu().numpy()
         for label in unique_labels:
-            cluster_embs = uniq_embs_and_timestamps['embeddings'][cluster_labels == label]
+            cluster_embs = embeddings[cluster_labels == label]
             centroid = np.mean(cluster_embs, axis=0)
             centroids_list.append(centroid)
         centroids[uniq_id] = np.array(centroids_list)
