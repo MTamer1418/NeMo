@@ -362,7 +362,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
                     torch.stack(self.speaker_database[speaker_id]['embeddings']), dim=0
                 )
 
-    def link_speakers(self, new_centroids, linkage_threshold):
+    def link_speakers(self, new_centroids):
         linked_speakers = {}
         for speaker_id, new_centroid in enumerate(new_centroids):
             best_match = None
@@ -372,7 +372,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
             # Compare new centroid with all stored centroids
             for stored_speaker, data in self.speaker_database.items():
                 score = np.linalg.norm(new_centroid - data['centroid'])
-                if score < linkage_threshold:
+                if score < 0.8:
                     best_score = score
                     best_match = stored_speaker
                     is_new_speaker = False
@@ -508,7 +508,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
         # Debug logging to check the structure of embs_and_timestamps
         logging.info(f"embs_and_timestamps structure: {embs_and_timestamps}")
     
-        all_reference, all_hypothesis = perform_clustering(
+        all_reference, all_hypothesis, centroids = perform_clustering(
             embs_and_timestamps=embs_and_timestamps,
             AUDIO_RTTM_MAP=self.AUDIO_RTTM_MAP,
             out_rttm_dir=out_rttm_dir,
@@ -533,7 +533,7 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
         # Perform speaker linking using centroids
         linked_speakers = {}
         for file_id, new_centroids in centroids.items():
-            linked_speakers[file_id] = self.link_speakers(new_centroids, linkage_threshold)
+            linked_speakers[file_id] = self.link_speakers(new_centroids)
 
         # Update the hypothesis with linked speaker information
         for file_id, hypothesis in all_hypothesis:
