@@ -434,30 +434,26 @@ def perform_clustering(
     embs_and_timestamps, AUDIO_RTTM_MAP, out_rttm_dir, clustering_params, device, verbose: bool = True
 ):
     """
-    Performs spectral clustering on embeddings with time stamps generated from VAD output
+    Performs spectral clustering on embeddings with time stamps generated from VAD output.
 
     Args:
-        embs_and_timestamps (dict): This dictionary contains the following items indexed by unique IDs.
-            'embeddings' : Tensor containing embeddings. Dimensions:(# of embs) x (emb. dimension)
-            'timestamps' : Tensor containing ime stamps list for each audio recording
-            'multiscale_segment_counts' : Tensor containing the number of segments for each scale
-        AUDIO_RTTM_MAP (dict): AUDIO_RTTM_MAP for mapping unique id with audio file path and rttm path
-        out_rttm_dir (str): Path to write predicted rttms
-        clustering_params (dict): clustering parameters provided through config that contains max_num_speakers (int),
-        oracle_num_speakers (bool), max_rp_threshold(float), sparse_search_volume(int) and enhance_count_threshold (int)
-        use_torch_script (bool): Boolean that determines whether to use torch.jit.script for speaker clustering
+        embs_and_timestamps (dict): Dictionary containing embeddings, timestamps, and multiscale segment counts.
+        AUDIO_RTTM_MAP (dict): Mapping of unique IDs with audio file path and RTTM path.
+        out_rttm_dir (str): Path to write predicted RTTMs.
+        clustering_params (dict): Clustering parameters provided through config.
         device (torch.device): Device we are running on ('cpu', 'cuda').
         verbose (bool): Enable TQDM progress bar.
 
     Returns:
-        all_reference (list[uniq_name,Annotation]): reference annotations for score calculation
-        all_hypothesis (list[uniq_name,Annotation]): hypothesis annotations for score calculation
-
+        all_reference (list[uniq_name, Annotation]): Reference annotations for score calculation.
+        all_hypothesis (list[uniq_name, Annotation]): Hypothesis annotations for score calculation.
+        centroids (dict): Dictionary containing centroids for each unique ID.
     """
     all_hypothesis = []
     all_reference = []
     no_references = False
     lines_cluster_labels = []
+    centroids = {}
 
     cuda = True
     if device.type != 'cuda':
@@ -500,11 +496,20 @@ def perform_clustering(
             torch.cuda.empty_cache()
         else:
             gc.collect()
-        timestamps = speaker_clustering.timestamps_in_scales[base_scale_idx]
 
+        timestamps = speaker_clustering.timestamps_in_scales[base_scale_idx]
         cluster_labels = cluster_labels.cpu().numpy()
         if len(cluster_labels) != timestamps.shape[0]:
             raise ValueError("Mismatch of length between cluster_labels and timestamps.")
+
+        # Compute centroids
+        unique_labels = np.unique(cluster_labels)
+        centroids_list = []
+        for label in unique_labels:
+            cluster_embs = uniq_embs_and_timestamps['embeddings'][cluster_labels == label]
+            centroid = np.mean(cluster_embs, axis=0)
+            centroids_list.append(centroid)
+        centroids[uniq_id] = np.array(centroids_list)
 
         labels, lines = generate_cluster_labels(timestamps, cluster_labels)
 
@@ -526,7 +531,7 @@ def perform_clustering(
     if out_rttm_dir:
         write_cluster_labels(base_scale_idx, lines_cluster_labels, out_rttm_dir)
 
-    return all_reference, all_hypothesis
+    return all_reference, all_hypothesis, centroids
 
 
 def get_vad_out_from_rttm_line(rttm_line):
