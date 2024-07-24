@@ -430,6 +430,10 @@ def generate_cluster_labels(segment_ranges: List[str], cluster_labels: List[int]
     return diar_hyp, lines
 
 
+import numpy as np
+import torch
+from tqdm import tqdm
+
 def perform_clustering(
     embs_and_timestamps, AUDIO_RTTM_MAP, out_rttm_dir, clustering_params, device, verbose: bool = True
 ):
@@ -479,6 +483,12 @@ def perform_clustering(
         # Aggregate embeddings across all scales
         combined_embeddings = torch.cat([emb for emb in uniq_embs_and_timestamps['embeddings']], dim=0).cpu().numpy()
         combined_timestamps = torch.cat([ts for ts in uniq_embs_and_timestamps['timestamps']], dim=0)
+
+        # Ensure embeddings and timestamps have the correct shape
+        if len(combined_embeddings.shape) == 1:
+            combined_embeddings = combined_embeddings.unsqueeze(0)
+        if len(combined_timestamps.shape) == 1:
+            combined_timestamps = combined_timestamps.unsqueeze(0)
 
         base_scale_idx = uniq_embs_and_timestamps['multiscale_segment_counts'].shape[0] - 1
 
@@ -539,6 +549,7 @@ def perform_clustering(
         write_cluster_labels(base_scale_idx, lines_cluster_labels, out_rttm_dir)
 
     return all_reference, all_hypothesis, centroids
+
 
 def get_vad_out_from_rttm_line(rttm_line):
     """
