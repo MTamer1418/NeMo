@@ -476,11 +476,15 @@ def perform_clustering(
         else:
             num_speakers = -1
 
+        # Aggregate embeddings across all scales
+        combined_embeddings = torch.cat(uniq_embs_and_timestamps['embeddings'], dim=0).cpu().numpy()
+        combined_timestamps = torch.cat(uniq_embs_and_timestamps['timestamps'], dim=0)
+
         base_scale_idx = uniq_embs_and_timestamps['multiscale_segment_counts'].shape[0] - 1
 
         cluster_labels = speaker_clustering.forward_infer(
-            embeddings_in_scales=uniq_embs_and_timestamps['embeddings'],
-            timestamps_in_scales=uniq_embs_and_timestamps['timestamps'],
+            embeddings_in_scales=combined_embeddings,
+            timestamps_in_scales=combined_timestamps,
             multiscale_segment_counts=uniq_embs_and_timestamps['multiscale_segment_counts'],
             multiscale_weights=uniq_embs_and_timestamps['multiscale_weights'],
             oracle_num_speakers=int(num_speakers),
@@ -491,22 +495,23 @@ def perform_clustering(
             embeddings_per_chunk=clustering_params.get('embeddings_per_chunk', None),
         )
 
-        timestamps = speaker_clustering.timestamps_in_scales[base_scale_idx]
         cluster_labels = cluster_labels.cpu().numpy()
-        if len(cluster_labels) != timestamps.shape[0]:
+        if len(cluster_labels) != combined_timestamps.shape[0]:
             raise ValueError("Mismatch of length between cluster_labels and timestamps.")
 
         # Compute centroids
         unique_labels = np.unique(cluster_labels)
         centroids_list = []
-        embeddings = uniq_embs_and_timestamps['embeddings'].cpu().numpy()
         for label in unique_labels:
-            cluster_embs = embeddings[cluster_labels == label]
+            mask = cluster_labels == label
+            cluster_embs = combined_embeddings[mask]
+            if len(cluster_embs) == 0:
+                continue
             centroid = np.mean(cluster_embs, axis=0)
             centroids_list.append(centroid)
         centroids[uniq_id] = np.array(centroids_list)
 
-        labels, lines = generate_cluster_labels(timestamps, cluster_labels)
+        labels, lines = generate_cluster_labels(combined_timestamps, cluster_labels)
 
         if out_rttm_dir:
             labels_to_rttmfile(labels, uniq_id, out_rttm_dir)
