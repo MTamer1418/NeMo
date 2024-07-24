@@ -477,8 +477,8 @@ def perform_clustering(
             num_speakers = -1
 
         # Aggregate embeddings across all scales
-        combined_embeddings = torch.cat(uniq_embs_and_timestamps['embeddings'], dim=0).cpu().numpy()
-        combined_timestamps = torch.cat(uniq_embs_and_timestamps['timestamps'], dim=0)
+        combined_embeddings = torch.cat([emb for emb in uniq_embs_and_timestamps['embeddings']], dim=0).cpu().numpy()
+        combined_timestamps = torch.cat([ts for ts in uniq_embs_and_timestamps['timestamps']], dim=0)
 
         base_scale_idx = uniq_embs_and_timestamps['multiscale_segment_counts'].shape[0] - 1
 
