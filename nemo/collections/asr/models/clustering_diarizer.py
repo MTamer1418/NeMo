@@ -362,36 +362,37 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
                     torch.stack(self.speaker_database[speaker_id]['embeddings']), dim=0
                 )
 
-    def link_speakers(self, new_file_id, new_embs):
+    def link_speakers(self, new_centroids, linkage_threshold):
         linked_speakers = {}
-        for speaker_id, new_emb in enumerate(new_embs):
+        for speaker_id, new_centroid in enumerate(new_centroids):
             best_match = None
             best_score = float('inf')
             is_new_speaker = True
     
-            # Compare new embedding with all stored embeddings
+            # Compare new centroid with all stored centroids
             for stored_speaker, data in self.speaker_database.items():
-                score = np.linalg.norm(new_emb - data['centroid'])
-                if score < 0.8:
+                score = np.linalg.norm(new_centroid - data['centroid'])
+                if score < linkage_threshold:
                     best_score = score
                     best_match = stored_speaker
                     is_new_speaker = False
+                    # Update the centroid by averaging with the new centroid
+                    self.speaker_database[stored_speaker]['centroid'] = (data['centroid'] + new_centroid) / 2
                     break  # Found a matching speaker, no need to continue checking
     
             if is_new_speaker:
                 # Add the new speaker to the database
-                new_speaker_key = f"{new_file_id}_speaker_{speaker_id}"
+                new_speaker_key = f"speaker_{self.unique_speaker_id}"
                 self.speaker_database[new_speaker_key] = {
-                    'centroid': new_emb,
-                    'embeddings': [new_emb],
+                    'centroid': new_centroid,
                     'unique_label': self.unique_speaker_id
                 }
-                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.unique_speaker_id
+                linked_speakers[f"speaker_{speaker_id}"] = self.unique_speaker_id
                 logging.info(f"New speaker {new_speaker_key} added with unique label {self.unique_speaker_id}")
                 self.unique_speaker_id += 1
             else:
-                logging.info(f"Speaker {new_file_id}_speaker_{speaker_id} matches with stored speaker {best_match} with score {best_score}")
-                linked_speakers[f"{new_file_id}_speaker_{speaker_id}"] = self.speaker_database[best_match]['unique_label']
+                logging.info(f"Speaker {speaker_id} matches with stored speaker {best_match} with score {best_score}")
+                linked_speakers[f"speaker_{speaker_id}"] = self.speaker_database[best_match]['unique_label']
     
         logging.info(f"Current speaker database: {self.speaker_database}")
         return linked_speakers
@@ -529,16 +530,11 @@ class ClusteringDiarizer(torch.nn.Module, Model, DiarizationMixin):
         # Ensure linkage_threshold is set
         linkage_threshold = self._cluster_params.get('linkage_threshold', 0.5)  # Set a default value if not present
     
-        # Perform speaker linking
+        # Perform speaker linking using centroids
         linked_speakers = {}
-        for file_id, embs in embs_and_timestamps.items():
-            logging.info(f"Processing file_id: {file_id} with embeddings: {embs}")
-            if 'embeddings' in embs:
-                file_linked_speakers = self.link_speakers(file_id, embs['embeddings'])  # 'embeddings' contains the embeddings
-                linked_speakers[file_id] = file_linked_speakers
-            else:
-                logging.error(f"Key 'embeddings' not found in embs for file_id: {file_id}")
-    
+        for file_id, new_centroids in centroids.items():
+            linked_speakers[file_id] = self.link_speakers(new_centroids, linkage_threshold)
+
         # Update the hypothesis with linked speaker information
         for file_id, hypothesis in all_hypothesis:
             for segment in hypothesis.itersegments():
