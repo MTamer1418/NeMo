@@ -481,7 +481,7 @@ def perform_clustering(
             num_speakers = -1
 
         # Aggregate embeddings across all scales
-        combined_embeddings = torch.cat([uniq_embs_and_timestamps['embeddings']], dim=0).cpu().numpy()
+        combined_embeddings = torch.cat([uniq_embs_and_timestamps['embeddings']], dim=0)
         combined_timestamps = torch.cat([uniq_embs_and_timestamps['timestamps']], dim=0)
 
         base_scale_idx = uniq_embs_and_timestamps['multiscale_segment_counts'].shape[0] - 1
@@ -511,8 +511,8 @@ def perform_clustering(
             cluster_embs = combined_embeddings[mask]
             if len(cluster_embs) == 0:
                 continue
-            centroid = np.mean(cluster_embs, axis=0)
-            centroids_list.append(centroid)
+            centroid = torch.mean(cluster_embs, dim=0)
+            centroids_list.append(centroid.cpu().numpy())
         centroids[uniq_id] = np.array(centroids_list)
 
         labels, lines = generate_cluster_labels(combined_timestamps, cluster_labels)
