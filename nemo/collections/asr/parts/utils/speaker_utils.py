@@ -491,12 +491,6 @@ def perform_clustering(
             embeddings_per_chunk=clustering_params.get('embeddings_per_chunk', None),
         )
 
-        del uniq_embs_and_timestamps
-        if cuda:
-            torch.cuda.empty_cache()
-        else:
-            gc.collect()
-
         timestamps = speaker_clustering.timestamps_in_scales[base_scale_idx]
         cluster_labels = cluster_labels.cpu().numpy()
         if len(cluster_labels) != timestamps.shape[0]:
@@ -528,11 +522,17 @@ def perform_clustering(
             no_references = True
             all_reference = []
 
+        # Now delete uniq_embs_and_timestamps after it has been used
+        del uniq_embs_and_timestamps
+        if cuda:
+            torch.cuda.empty_cache()
+        else:
+            gc.collect()
+
     if out_rttm_dir:
         write_cluster_labels(base_scale_idx, lines_cluster_labels, out_rttm_dir)
 
     return all_reference, all_hypothesis, centroids
-
 
 def get_vad_out_from_rttm_line(rttm_line):
     """
